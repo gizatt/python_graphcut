@@ -43,9 +43,24 @@ class HistogramDistribution():
 
 def main():
     # CONFIG PARAMS
-    B_sigma = 0.25
+
+    # Color coherency term -- larger leads to higher
+    # affinities between neighboring pixels of more
+    # dissimilar colors. Variance in intensity space.
+    B_sigma = 0.05
+    # # of histogram bins used for computing prior over
+    # foreground + background colors.
     n_hist_bins = 25
+    # Ratio by which the input image is scaled down.
     image_scale = 4
+    # Multiplicative weight given to edges
+    # connecting unlabeled nodes to the background
+    # based on their negative log likelihood under
+    # the background/foreground intensity distributions.
+    dist_lambda = 10.
+    # 
+    connect_sink_and_source = True
+
     # Load interesting image
     img = Image.open("Input/ycb_blender.jpg")
     img_orig_rows = img.height
@@ -113,14 +128,14 @@ def main():
     for u_neighbor_dir in [-1, 0, 1]:
         us, vs = np.meshgrid(range(rows), range(cols), indexing='ij')
         inds = uv_to_ind(us, vs)
-        valid_inds = inds[1:-1, 1:-1]
         for v_neighbor_dir in [-1, 0, 1]:
             if u_neighbor_dir == v_neighbor_dir == 0:
-                continue
-            dist = np.sqrt(float(u_neighbor_dir**2 + v_neighbor_dir**2))
+                dist = 1.
+            else:
+                dist = np.sqrt(float(u_neighbor_dir**2 + v_neighbor_dir**2))
             diff_im = (img_lum_array -
                        np.roll(img_lum_array,
-                               (u_neighbor_dir, v_neighbor_dir), range(2)))[1:-1, 1:-1]
+                               (u_neighbor_dir, v_neighbor_dir), range(2)))
             # Luminance smoothness -- higher scores for closeness
             # of neighboring colors.
             Bpq = np.exp(-np.square(diff_im).astype(float) / (2. * B_sigma**2.))/dist
@@ -128,7 +143,28 @@ def main():
             # color_diff_im = (img_array - np.roll(img_array, (u_neighbor_dir, v_neighbor_dir), range(2)))[1:-1, 1:-1, :]
             # Bpq = np.exp(-np.sum(np.square(color_diff_im), axis=2).astype(float)/(2.*B_sigma**2.))/dist
             rolled_inds = np.roll(
-                inds, (u_neighbor_dir, v_neighbor_dir), range(2))[1:-1, 1:-1]
+                inds, (u_neighbor_dir, v_neighbor_dir), range(2))
+
+            # Ugly logic for cutting off edges that aren't valid
+            # in this cycle:
+            valid_inds = inds.copy()
+            if u_neighbor_dir == 1:
+                Bpq = Bpq[1:, :]
+                rolled_inds = rolled_inds[1:, :]
+                valid_inds = valid_inds[1:, :]
+            elif u_neighbor_dir == -1:
+                Bpq = Bpq[:-1, :]
+                rolled_inds = rolled_inds[:-1, :]
+                valid_inds = valid_inds[:-1, :]
+            if v_neighbor_dir == 1:
+                Bpq = Bpq[:, 1:]
+                rolled_inds = rolled_inds[:, 1:]
+                valid_inds = valid_inds[:, 1:]
+            elif v_neighbor_dir == -1:
+                Bpq = Bpq[:, :-1]
+                rolled_inds = rolled_inds[:, :-1]
+                valid_inds = valid_inds[:, :-1]
+            print(u_neighbor_dir, v_neighbor_dir, Bpq.shape, rolled_inds.shape, valid_inds.shape)
             graph_matrix += scipy.sparse.coo_matrix(
                 (Bpq.flatten(), (valid_inds.flatten(), rolled_inds.flatten())),
                 shape=graph_matrix.shape)
@@ -142,58 +178,67 @@ def main():
     print("Pairwise relationship terms added in %f seconds. Max B_pq = %f" %
           (time.time()-start_Bpq, max_Bpq))
 
-    start_sink_and_source = time.time()
-    K = 1. + max_Bpq
-    # Background nodes connect to the source for free..
-    graph_matrix += scipy.sparse.coo_matrix(
-        (np.zeros(n_bg_label_inds),
-         (np.ones(n_bg_label_inds, dtype=np.long)*source_node_ind,
-          uv_to_ind(bg_label_inds[0, :], bg_label_inds[1, :]))),
-        shape=graph_matrix.shape)
-    # Background nodes connect to the sink with exceeding large weight.
-    graph_matrix += scipy.sparse.coo_matrix(
-        (np.ones(n_bg_label_inds)*K,
-         (np.ones(n_bg_label_inds, dtype=np.long)*sink_node_ind,
-          uv_to_ind(bg_label_inds[0, :], bg_label_inds[1, :]))),
-        shape=graph_matrix.shape)
+    if connect_sink_and_source:
+        start_sink_and_source = time.time()
+        K = 1. + max_Bpq
+        # Background nodes connect to the source for free..
+        graph_matrix += scipy.sparse.coo_matrix(
+            (np.zeros(n_bg_label_inds),
+             (np.ones(n_bg_label_inds, dtype=np.long)*source_node_ind,
+              uv_to_ind(bg_label_inds[0, :], bg_label_inds[1, :]))),
+            shape=graph_matrix.shape)
+        # Background nodes connect to the sink with exceeding large weight.
+        graph_matrix += scipy.sparse.coo_matrix(
+            (np.ones(n_bg_label_inds)*K,
+             (np.ones(n_bg_label_inds, dtype=np.long)*sink_node_ind,
+              uv_to_ind(bg_label_inds[0, :], bg_label_inds[1, :]))),
+            shape=graph_matrix.shape)
 
-    # Foreground nodes connect to the sink for free.
-    graph_matrix += scipy.sparse.coo_matrix(
-        (np.zeros(n_fg_label_inds),
-         (np.ones(n_fg_label_inds, dtype=np.long)*sink_node_ind,
-          uv_to_ind(fg_label_inds[0, :], fg_label_inds[1, :]))),
-        shape=graph_matrix.shape)
-    # Foreground nodes connect to source with larger weight than
-    # any other edge going to that node.
-    graph_matrix += scipy.sparse.coo_matrix(
-        (np.ones(n_fg_label_inds)*K,
-         (np.ones(n_fg_label_inds, dtype=np.long)*source_node_ind,
-          uv_to_ind(fg_label_inds[0, :], fg_label_inds[1, :]))),
-        shape=graph_matrix.shape)
+        # Foreground nodes connect to the sink for free.
+        graph_matrix += scipy.sparse.coo_matrix(
+            (np.zeros(n_fg_label_inds),
+             (np.ones(n_fg_label_inds, dtype=np.long)*sink_node_ind,
+              uv_to_ind(fg_label_inds[0, :], fg_label_inds[1, :]))),
+            shape=graph_matrix.shape)
+        # Foreground nodes connect to source with larger weight than
+        # any other edge going to that node.
+        graph_matrix += scipy.sparse.coo_matrix(
+            (np.ones(n_fg_label_inds)*K,
+             (np.ones(n_fg_label_inds, dtype=np.long)*source_node_ind,
+              uv_to_ind(fg_label_inds[0, :], fg_label_inds[1, :]))),
+            shape=graph_matrix.shape)
 
-    # Unlabled nodes should connect to the background and foreground
-    # with weight on how they fit into the respective intensity histograms.
-    graph_matrix += scipy.sparse.coo_matrix(
-        (np.ones(n_not_labeled_inds)*fg_nll,
-         (np.ones(n_not_labeled_inds, dtype=np.long)*sink_node_ind,
-          uv_to_ind(not_labeled_inds[0, :], not_labeled_inds[1, :]))),
-        shape=graph_matrix.shape)
-    graph_matrix += scipy.sparse.coo_matrix(
-        (np.ones(n_not_labeled_inds)*bg_nll,
-         (np.ones(n_not_labeled_inds, dtype=np.long)*source_node_ind,
-          uv_to_ind(not_labeled_inds[0, :], not_labeled_inds[1, :]))),
-        shape=graph_matrix.shape)
+        # Unlabled nodes should connect to the background and foreground
+        # with weight on how they fit into the respective intensity histograms.
+        graph_matrix += scipy.sparse.coo_matrix(
+            (np.ones(n_not_labeled_inds)*fg_nll*dist_lambda,
+             (np.ones(n_not_labeled_inds, dtype=np.long)*source_node_ind,
+              uv_to_ind(not_labeled_inds[0, :], not_labeled_inds[1, :]))),
+            shape=graph_matrix.shape)
+        graph_matrix += scipy.sparse.coo_matrix(
+            (np.ones(n_not_labeled_inds)*bg_nll*dist_lambda,
+             (np.ones(n_not_labeled_inds, dtype=np.long)*sink_node_ind,
+              uv_to_ind(not_labeled_inds[0, :], not_labeled_inds[1, :]))),
+            shape=graph_matrix.shape)
 
-    print("Bg and fg relationship terms added in %f seconds." %
-          (time.time() - start_sink_and_source))
+        # Duplicate all of the above into the transpose part of
+        # the matrix.
+        graph_matrix[:, -2:] += graph_matrix[-2:, :].T
 
+        print("Bg and fg relationship terms added in %f seconds." %
+              (time.time() - start_sink_and_source))
+
+    # Calculate graph Laplacian and its eigendecomp
     start_laplacian = time.time()
     affinity_part = graph_matrix[:, :].copy()
+    # Normalize affinity
+    affinity_part.data -= np.min(affinity_part.data)
     affinity_part.data /= np.max(affinity_part.data)
-    affinity_part.data = affinity_part.data
-    affinity_part.setdiag(1.)
+    print(affinity_part[:5, :5].todense())
+    #affinity_part.setdiag(1.)
     # Eq 3, Semantic Soft Segmentation, approx laplacian
-    D = scipy.sparse.diags(affinity_part.dot(np.ones(affinity_part.shape[0])))
+    # Graph is undirectional, so axis of sum should not matter.
+    D = scipy.sparse.diags(np.array(affinity_part.sum(axis=0)).squeeze())
     D_isqrt = scipy.sparse.diags(
         np.reciprocal(np.sqrt(
             affinity_part.dot(np.ones(affinity_part.shape[0])))))
@@ -225,7 +270,7 @@ def main():
         eigvec = np.real(lap_eigvecs[:rows*cols, k])
         eigvec /= np.max(np.abs(eigvec))
         eigvec = eigvec.reshape(rows, cols)
-        img_recolored_by_eigvec = np.stack([img_lum_array,
+        img_recolored_by_eigvec = np.stack([img_lum_array*0.2,
                                             np.clip(-eigvec, 0., 1.),
                                             np.clip(-eigvec, 0., 1.)],
                                             axis=-1)
