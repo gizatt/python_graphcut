@@ -9,21 +9,29 @@ from scipy.interpolate import interp1d
 import time
 from PIL import Image
 
+import networkx
+import networkx.algorithms.flow as flow
 
-# Ref
-# https://carlonicolini.github.io/sections/science/2018/09/12/weighted-graph-from-adjacency-matrix-in-graph-tool.html
-def image_to_graphcut_graph(adj):
-    g = gt.Graph(directed=False)
-    edge_weights = g.new_edge_property('float')
-    g.edge_properties['weight'] = edge_weights
-    nnz = np.nonzero(np.triu(adj, 1))
-    nedges = len(nnz[0])
-    g.add_edge_list(
-        np.hstack(
-            [np.transpose(nnz),
-             np.reshape(adj[nnz], (nedges, 1))]),
-        eprops=[edge_weights])
-    return g
+def perform_min_cut(cgraph, s_index, t_index):
+    print("Starting min cut with networkx library.")
+    start_time = time.time()
+    G = networkx.from_scipy_sparse_matrix(cgraph, edge_attribute="capacity")
+    print("... converted graph in %f seconds." % (time.time() - start_time))
+    start_time = time.time()
+    cut_value, partition = flow.minimum_cut(G, s_index, t_index)
+    print("... final cut value %f. " % (cut_value))
+    # Sanity-check which is foreground / background?
+    if s_index in partition[0]:
+        foreground_inds = partition[0]
+        background_inds = partition[1]
+    else:
+        foreground_inds = partition[1]
+        background_inds = partition[0]
+
+    print("... foreground has %d nodes, background has %d nodes." %
+          (len(foreground_inds), len(background_inds)))
+    print("... done in %f seconds." % (time.time() - start_time))
+    return foreground_inds, background_inds
 
 
 class HistogramDistribution():
@@ -31,53 +39,97 @@ class HistogramDistribution():
         hist, bin_edges = np.histogram(data, density=True, **kwargs)
         self.pdf_approx = interp1d(bin_edges[:-1], hist,
                                    kind='previous', bounds_error=False,
-                                   fill_value=0)
+                                   fill_value="extrapolate")
 
     def pdf(self, x):
         return self.pdf_approx(x)
 
     def log_pdf(self, x):
         # Avoid -infs
-        return np.log(self.pdf_approx(x) + 1E-5)
+        return np.log(self.pdf_approx(x) + 1E-6)
 
 
 def main():
     # CONFIG PARAMS
 
-    # Color coherency term -- larger leads to higher
-    # affinities between neighboring pixels of more
-    # dissimilar colors. Variance in intensity space.
-    B_sigma = 0.05
-    # # of histogram bins used for computing prior over
+    # n_hist_bins: # of histogram bins used for computing prior over
     # foreground + background colors.
-    n_hist_bins = 25
-    # Ratio by which the input image is scaled down.
-    image_scale = 4
-    # Multiplicative weight given to edges
+    # Image_scale: Ratio by which the input image is scaled down.
+    # Dist_lambda: Multiplicative weight given to edges
     # connecting unlabeled nodes to the background
     # based on their negative log likelihood under
     # the background/foreground intensity distributions.
-    dist_lambda = 10.
-    # 
-    connect_sink_and_source = True
+
+    do_min_cut = True
+    do_laplacian = False
+    connect_node_labels = True
+    connect_color_priors = True
 
     # Load interesting image
-    img = Image.open("Input/ycb_blender.jpg")
+    image_set = []
+
+    params = {
+        "color_image": "Input/jeb.png",
+        "label_image": "Input/jeb_labels.bmp",
+        "image_scale": 1,
+        "n_hist_bins": 50,
+        "dist_lambda": 1/50.,
+        "neighbor_inds": [-1, 0, 1]
+    }
+
+    params = {
+        "color_image": "Input/gundam.jpg",
+        "label_image": "Input/gundam_labels.bmp",
+        "image_scale": 8,
+        "n_hist_bins": 50,
+        "dist_lambda": 1/50.,
+        "neighbor_inds": [-1, 0, 1]
+    }
+
+    params = {
+        "color_image": "Input/ycb_blender.jpg",
+        "label_image": "Input/ycb_blender_labels.bmp",
+        "image_scale": 4,
+        "n_hist_bins": 50,
+        "dist_lambda": 1/50.,
+        "neighbor_inds": [-1, 0, 1]
+    }
+
+    n_hist_bins = params["n_hist_bins"]
+    dist_lambda = params["dist_lambda"]
+    color_image = params["color_image"]
+    label_image = params["label_image"]
+    image_scale = params["image_scale"]
+    neighbor_inds = params["neighbor_inds"]
+
+    img = Image.open(color_image)
     img_orig_rows = img.height
     img_orig_cols = img.width
     img = img.resize((img_orig_cols/image_scale, img_orig_rows/image_scale))
     img_lum = img.convert('L')
     img_lum_array = np.array(img_lum)/255.
     img_array = np.array(img)/255.
-    img_labels_gt = Image.open("Input/ycb_blender_labels_gt.bmp").resize((img_orig_cols/image_scale, img_orig_rows/image_scale))
-    img_labels_gt_array = np.array(img_labels_gt)/255.
-    img_labels = Image.open("Input/ycb_blender_labels.bmp").resize((img_orig_cols/image_scale, img_orig_rows/image_scale))
+    img_labels = Image.open(label_image).resize(
+        (img_orig_cols/image_scale, img_orig_rows/image_scale))
     img_labels_array = np.array(img_labels)/255.
 
     rows = img_array.shape[0]
     cols = img_array.shape[1]
     print("Input resolution: %d rows x %d cols" % (rows, cols))
 
+    plt.figure().set_size_inches(12, 12)
+    plt.subplot(3, 1, 1)
+    plt.imshow(img_lum)
+    plt.title("Luminance image")
+    plt.subplot(3, 1, 2)
+    plt.imshow(img_labels)
+    plt.title("Label image")
+    plt.subplot(3, 1, 3)
+    plt.imshow(img_labels_array*0.75 +
+               np.stack([img_lum_array]*3, axis=-1))
+    plt.title("Labels over luminance image")
+
+    plt.pause(0.1)
     # Generate background and foreground index lists.
     # Mask foreground in red (taking anything close
     # in case image compression does weird things)
@@ -105,14 +157,37 @@ def main():
         bins=n_hist_bins, range=(0., 1.))
 
     # Precompute the log-likelihoods at the not-labeled positions
-    fg_nll = -fg_intensity_hist.log_pdf(img_lum_array)
-    fg_nll = fg_nll[not_labeled_inds[0, :],
-                    not_labeled_inds[1, :]]
-    print("FG NLL range: %f to %f" % (np.min(fg_nll), np.max(fg_nll)))
-    bg_nll = -bg_intensity_hist.log_pdf(img_lum_array)
-    bg_nll = bg_nll[not_labeled_inds[0, :],
-                    not_labeled_inds[1, :]]
+    fg_nll_all = -fg_intensity_hist.log_pdf(img_lum_array)
+    bg_nll_all = -bg_intensity_hist.log_pdf(img_lum_array)
+    plt.figure()
+    plt.title("Foreground and background nlls over image")
+    plt.subplot(1, 2, 1)
+    plt.imshow(fg_nll_all)
+    plt.title("FG NLL")
+    plt.subplot(1, 2, 2)
+    plt.imshow(bg_nll_all)
+    plt.title("BG NLL")
+    plt.pause(1E-3)
+    bg_nll = bg_nll_all[not_labeled_inds[0, :],
+                        not_labeled_inds[1, :]]
+    fg_nll = fg_nll_all[not_labeled_inds[0, :],
+                        not_labeled_inds[1, :]]
     print("BG NLL range: %f to %f" % (np.min(bg_nll), np.max(bg_nll)))
+    print("FG NLL range: %f to %f" % (np.min(fg_nll), np.max(fg_nll)))
+    plt.figure()
+    plt.subplot(1, 2, 1)
+    xi = np.linspace(0.0, 1.0, 255)
+
+    plt.plot(xi, fg_intensity_hist.log_pdf(xi), label="log_pdf")
+    plt.plot(xi, fg_intensity_hist.pdf(xi), label="pdf")
+    plt.legend()
+    plt.title("Foreground histogram")
+    plt.subplot(1, 2, 2)
+    plt.plot(xi, bg_intensity_hist.log_pdf(xi), label="log_pdf")
+    plt.plot(xi, bg_intensity_hist.pdf(xi), label="pdf")
+    plt.legend()
+    plt.title("Background histogram")
+    plt.pause(0.1)
 
     # Build segmentation graph from GraphCut
     N_nodes = rows*cols + 2
@@ -125,10 +200,12 @@ def main():
 
     # Compute pairwise relationships terms
     start_Bpq = time.time()
-    for u_neighbor_dir in [-1, 0, 1]:
+    plt.figure()
+    nn = len(neighbor_inds)
+    for ui, u_neighbor_dir in enumerate(neighbor_inds):
         us, vs = np.meshgrid(range(rows), range(cols), indexing='ij')
         inds = uv_to_ind(us, vs)
-        for v_neighbor_dir in [-1, 0, 1]:
+        for vi, v_neighbor_dir in enumerate(neighbor_inds):
             if u_neighbor_dir == v_neighbor_dir == 0:
                 dist = 1.
             else:
@@ -136,9 +213,13 @@ def main():
             diff_im = (img_lum_array -
                        np.roll(img_lum_array,
                                (u_neighbor_dir, v_neighbor_dir), range(2)))
+            diff_im = np.square(diff_im).astype(float)
+            # Calculate sigma via Eq 5 in the GrabCut paper as scaled
+            # to the expected contrast across the whole image
+            B_sigma = np.mean(diff_im) + 1E-6
             # Luminance smoothness -- higher scores for closeness
             # of neighboring colors.
-            Bpq = np.exp(-np.square(diff_im).astype(float) / (2. * B_sigma**2.))/dist
+            Bpq = np.exp(-diff_im / (2. * B_sigma))/dist
             # Same thing, but in full color space.
             # color_diff_im = (img_array - np.roll(img_array, (u_neighbor_dir, v_neighbor_dir), range(2)))[1:-1, 1:-1, :]
             # Bpq = np.exp(-np.sum(np.square(color_diff_im), axis=2).astype(float)/(2.*B_sigma**2.))/dist
@@ -148,39 +229,42 @@ def main():
             # Ugly logic for cutting off edges that aren't valid
             # in this cycle:
             valid_inds = inds.copy()
-            if u_neighbor_dir == 1:
-                Bpq = Bpq[1:, :]
-                rolled_inds = rolled_inds[1:, :]
-                valid_inds = valid_inds[1:, :]
-            elif u_neighbor_dir == -1:
-                Bpq = Bpq[:-1, :]
-                rolled_inds = rolled_inds[:-1, :]
-                valid_inds = valid_inds[:-1, :]
-            if v_neighbor_dir == 1:
-                Bpq = Bpq[:, 1:]
-                rolled_inds = rolled_inds[:, 1:]
-                valid_inds = valid_inds[:, 1:]
-            elif v_neighbor_dir == -1:
-                Bpq = Bpq[:, :-1]
-                rolled_inds = rolled_inds[:, :-1]
-                valid_inds = valid_inds[:, :-1]
-            print(u_neighbor_dir, v_neighbor_dir, Bpq.shape, rolled_inds.shape, valid_inds.shape)
+            if u_neighbor_dir >= 1:
+                Bpq = Bpq[u_neighbor_dir:, :]
+                rolled_inds = rolled_inds[u_neighbor_dir:, :]
+                valid_inds = valid_inds[u_neighbor_dir:, :]
+            elif u_neighbor_dir <= -1:
+                Bpq = Bpq[:u_neighbor_dir, :]
+                rolled_inds = rolled_inds[:u_neighbor_dir, :]
+                valid_inds = valid_inds[:u_neighbor_dir, :]
+            if v_neighbor_dir >= 1:
+                Bpq = Bpq[:, v_neighbor_dir:]
+                rolled_inds = rolled_inds[:, v_neighbor_dir:]
+                valid_inds = valid_inds[:, v_neighbor_dir:]
+            elif v_neighbor_dir <= -1:
+                Bpq = Bpq[:, :v_neighbor_dir]
+                rolled_inds = rolled_inds[:, :v_neighbor_dir]
+                valid_inds = valid_inds[:, :v_neighbor_dir]
             graph_matrix += scipy.sparse.coo_matrix(
                 (Bpq.flatten(), (valid_inds.flatten(), rolled_inds.flatten())),
                 shape=graph_matrix.shape)
+            plt.subplot(nn, nn, ui*nn + vi + 1)
+            plt.title("Offset %d, %d" % (u_neighbor_dir, v_neighbor_dir))
+            plt.imshow(Bpq)
+    plt.tight_layout()
 
-    # In the paper, this weight is calculated per pixel as
-    #  1 + the max weight connecting that pixel to another pixel.
+    # Find a K that exceeds the sum (across pixels) of the max connection
+    # going in to each pixel.
+    K_per_pixel = graph_matrix[:-2, :-2].max(axis=1).toarray().squeeze()
+    K = np.max(K_per_pixel) + 1
     # That's a little burdensome to calculate around, and only
     # matters as a "sufficiently big" number, so I take the max of that
     # over all pixels here instead.
-    max_Bpq = np.max(graph_matrix.data)
-    print("Pairwise relationship terms added in %f seconds. Max B_pq = %f" %
-          (time.time()-start_Bpq, max_Bpq))
+    print("Pairwise relationship terms added in %f seconds." % (
+        time.time() - start_Bpq))
 
-    if connect_sink_and_source:
-        start_sink_and_source = time.time()
-        K = 1. + max_Bpq
+    start_sink_and_source = time.time()
+    if connect_node_labels:
         # Background nodes connect to the source for free..
         graph_matrix += scipy.sparse.coo_matrix(
             (np.zeros(n_bg_label_inds),
@@ -189,7 +273,7 @@ def main():
             shape=graph_matrix.shape)
         # Background nodes connect to the sink with exceeding large weight.
         graph_matrix += scipy.sparse.coo_matrix(
-            (np.ones(n_bg_label_inds)*K,
+            (K * np.ones(n_bg_label_inds),
              (np.ones(n_bg_label_inds, dtype=np.long)*sink_node_ind,
               uv_to_ind(bg_label_inds[0, :], bg_label_inds[1, :]))),
             shape=graph_matrix.shape)
@@ -203,79 +287,108 @@ def main():
         # Foreground nodes connect to source with larger weight than
         # any other edge going to that node.
         graph_matrix += scipy.sparse.coo_matrix(
-            (np.ones(n_fg_label_inds)*K,
+            (K * np.ones(n_fg_label_inds),
              (np.ones(n_fg_label_inds, dtype=np.long)*source_node_ind,
               uv_to_ind(fg_label_inds[0, :], fg_label_inds[1, :]))),
             shape=graph_matrix.shape)
 
-        # Unlabled nodes should connect to the background and foreground
-        # with weight on how they fit into the respective intensity histograms.
-        graph_matrix += scipy.sparse.coo_matrix(
-            (np.ones(n_not_labeled_inds)*fg_nll*dist_lambda,
-             (np.ones(n_not_labeled_inds, dtype=np.long)*source_node_ind,
-              uv_to_ind(not_labeled_inds[0, :], not_labeled_inds[1, :]))),
-            shape=graph_matrix.shape)
-        graph_matrix += scipy.sparse.coo_matrix(
-            (np.ones(n_not_labeled_inds)*bg_nll*dist_lambda,
-             (np.ones(n_not_labeled_inds, dtype=np.long)*sink_node_ind,
-              uv_to_ind(not_labeled_inds[0, :], not_labeled_inds[1, :]))),
-            shape=graph_matrix.shape)
+    if connect_color_priors:
+        if not connect_node_labels:
+            # All nodes should connect to the background and foreground
+            # with weight on how they fit into the OPPOSITE intensity histograms.
+            graph_matrix[source_node_ind, :-2] += bg_nll_all.flatten()
+            graph_matrix[sink_node_ind, :-2] += fg_nll_all.flatten()
+        else:
+            # Unlabled nodes should connect to the background and foreground
+            # with weight on how they fit into the OPPOSITE intensity histograms.
+            graph_matrix += scipy.sparse.coo_matrix(
+                (np.ones(n_not_labeled_inds)*bg_nll*dist_lambda,
+                 (np.ones(n_not_labeled_inds, dtype=np.long)*source_node_ind,
+                  uv_to_ind(not_labeled_inds[0, :], not_labeled_inds[1, :]))),
+                shape=graph_matrix.shape)
+            graph_matrix += scipy.sparse.coo_matrix(
+                (np.ones(n_not_labeled_inds)*fg_nll*dist_lambda,
+                 (np.ones(n_not_labeled_inds, dtype=np.long)*sink_node_ind,
+                  uv_to_ind(not_labeled_inds[0, :], not_labeled_inds[1, :]))),
+                shape=graph_matrix.shape)
 
-        # Duplicate all of the above into the transpose part of
-        # the matrix.
-        graph_matrix[:, -2:] += graph_matrix[-2:, :].T
+    # Duplicate all of the above into the transpose part of
+    # the matrix.
+    graph_matrix[:, -2:] += graph_matrix[-2:, :].T
+    plt.figure()
+    plt.title("Weights to the sink and source")
+    plt.subplot(2, 2, 1)
+    plt.imshow(np.asarray(graph_matrix[:-2, -2].todense()).reshape(img_lum_array.shape))
+    plt.title("To source")
+    plt.subplot(2, 2, 2)
+    plt.title("To sink")
+    plt.imshow(np.asarray(graph_matrix[:-2, -1].todense()).reshape(img_lum_array.shape))
+    plt.subplot(2, 2, 3)
+    plt.title("To source")
+    plt.imshow(np.asarray(graph_matrix[-2, :-2].todense()).reshape(img_lum_array.shape))
+    plt.subplot(2, 2, 4)
+    plt.title("To sink")
+    plt.imshow(np.asarray(graph_matrix[-1, :-2].todense()).reshape(img_lum_array.shape))
+    plt.pause(1E-3)
 
-        print("Bg and fg relationship terms added in %f seconds." %
-              (time.time() - start_sink_and_source))
+    print("Bg and fg relationship terms added in %f seconds." %
+          (time.time() - start_sink_and_source))
 
-    # Calculate graph Laplacian and its eigendecomp
-    start_laplacian = time.time()
-    affinity_part = graph_matrix[:, :].copy()
-    # Normalize affinity
-    affinity_part.data -= np.min(affinity_part.data)
-    affinity_part.data /= np.max(affinity_part.data)
-    print(affinity_part[:5, :5].todense())
-    #affinity_part.setdiag(1.)
-    # Eq 3, Semantic Soft Segmentation, approx laplacian
-    # Graph is undirectional, so axis of sum should not matter.
-    D = scipy.sparse.diags(np.array(affinity_part.sum(axis=0)).squeeze())
-    D_isqrt = scipy.sparse.diags(
-        np.reciprocal(np.sqrt(
-            affinity_part.dot(np.ones(affinity_part.shape[0])))))
-    laplacian = D_isqrt.dot(D - affinity_part).dot(D_isqrt)
-    print("Computed laplacian %f seconds." % (
-          (time.time() - start_laplacian)))
-    #laplacian = scipy.sparse.csgraph.laplacian(affinity_part, normed=True)
-    N_eigvecs = 4
-    start_laplacian_eigs = time.time()
-    lap_eigs, lap_eigvecs = scipy.sparse.linalg.eigs(
-        laplacian, k=N_eigvecs)
-    print("Computed laplacian  eigs in %f seconds." % (
-          (time.time() - start_laplacian_eigs)))
+    if do_min_cut:
+        foreground_inds, background_inds = perform_min_cut(
+            graph_matrix, source_node_ind, sink_node_ind)
+        background_inds.remove(sink_node_ind)
+        foreground_inds.remove(source_node_ind)
+        plt.figure().set_size_inches(10, 10)
+        mask_bg = img_lum_array.copy().reshape(-1)
+        mask_bg[list(background_inds)] = 1.0
+        mask_bg = mask_bg.reshape(img_lum_array.shape)
+        mask_fg = img_lum_array.copy().reshape(-1)
+        mask_fg[list(foreground_inds)] = 1.0
+        mask_fg = mask_fg.reshape(img_lum_array.shape)
 
-    plt.figure().set_size_inches(12, 12)
-    plt.subplot(3, 1, 1)
-    plt.imshow(img_lum)
-    plt.title("Luminance image")
-    plt.subplot(3, 1, 2)
-    plt.imshow(img_labels)
-    plt.title("Label image")
-    plt.subplot(3, 1, 3)
-    plt.imshow(img_labels_gt)
-    plt.title("GT labels")
+        combined_masks = np.stack([img_lum_array*0.25 + mask_fg*0.75,
+                                   img_lum_array*0.25,
+                                   img_lum_array*0.25 + mask_bg*0.75], axis=-1)
+        plt.imshow(combined_masks)
 
-    plt.figure().set_size_inches(12, 12)
-    for k in range(N_eigvecs):
-        plt.subplot(np.ceil(N_eigvecs/2.), 2, k+1)
-        eigvec = np.real(lap_eigvecs[:rows*cols, k])
-        eigvec /= np.max(np.abs(eigvec))
-        eigvec = eigvec.reshape(rows, cols)
-        img_recolored_by_eigvec = np.stack([img_lum_array*0.2,
-                                            np.clip(-eigvec, 0., 1.),
-                                            np.clip(-eigvec, 0., 1.)],
-                                            axis=-1)
-        plt.imshow(img_recolored_by_eigvec)
-        plt.title("Eigenvec #%d" % k)
+    if do_laplacian:
+        # Calculate graph Laplacian and its eigendecomp
+        start_laplacian = time.time()
+        affinity_part = graph_matrix.copy()
+        # Normalize affinity
+        #affinity_part.data -= np.min(affinity_part.data)
+        #affinity_part.data /= np.max(affinity_part.data)
+
+        # Eq 3, Semantic Soft Segmentation, approx laplacian
+        # Graph is undirectional, so axis of sum should not matter.
+        D = scipy.sparse.diags(np.asarray(affinity_part.sum(axis=0)).squeeze())
+        D_isqrt = scipy.sparse.diags(
+            np.reciprocal(np.sqrt(
+                affinity_part.dot(np.ones(affinity_part.shape[0])))))
+        laplacian = D_isqrt.dot(D - affinity_part).dot(D_isqrt)
+        print("Computed laplacian %f seconds." % (
+              (time.time() - start_laplacian)))
+        #laplacian = scipy.sparse.csgraph.laplacian(affinity_part, normed=True)
+        N_eigvecs = 10
+        start_laplacian_eigs = time.time()
+        lap_eigs, lap_eigvecs = scipy.sparse.linalg.eigs(
+            laplacian, k=N_eigvecs)
+        print("Computed laplacian  eigs in %f seconds." % (
+              (time.time() - start_laplacian_eigs)))
+
+        plt.figure().set_size_inches(12, 12)
+        for k in range(N_eigvecs):
+            plt.subplot(np.ceil(N_eigvecs/2.), 2, k+1)
+            eigvec = np.real(lap_eigvecs[:rows*cols, k])
+            eigvec /= np.max(np.abs(eigvec))
+            eigvec = eigvec.reshape(rows, cols)
+            img_recolored_by_eigvec = np.stack([img_lum_array*0.2,
+                                                np.clip(-eigvec, 0., 1.),
+                                                np.clip(-eigvec, 0., 1.)],
+                                                axis=-1)
+            plt.imshow(img_recolored_by_eigvec)
+            plt.title("Eigenvec #%d" % k)
 
     plt.show()
 
