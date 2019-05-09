@@ -12,13 +12,16 @@ from PIL import Image
 import networkx
 import networkx.algorithms.flow as flow
 
-def perform_min_cut(cgraph, s_index, t_index):
+
+def perform_min_cut(cgraph, s_index, t_index, residual=None):
     print("Starting min cut with networkx library.")
     start_time = time.time()
     G = networkx.from_scipy_sparse_matrix(cgraph, edge_attribute="capacity")
     print("... converted graph in %f seconds." % (time.time() - start_time))
     start_time = time.time()
-    cut_value, partition = flow.minimum_cut(G, s_index, t_index)
+    cut_value, partition = flow.minimum_cut(
+        G, s_index, t_index,
+        flow_func=flow.preflow_push, residual=residual)
     print("... final cut value %f. " % (cut_value))
     # Sanity-check which is foreground / background?
     if s_index in partition[0]:
@@ -77,23 +80,23 @@ def main():
         "neighbor_inds": [-1, 0, 1]
     }
 
-    params = {
-        "color_image": "Input/gundam.jpg",
-        "label_image": "Input/gundam_labels.bmp",
-        "image_scale": 8,
-        "n_hist_bins": 50,
-        "dist_lambda": 1/50.,
-        "neighbor_inds": [-1, 0, 1]
-    }
-
-    params = {
-        "color_image": "Input/ycb_blender.jpg",
-        "label_image": "Input/ycb_blender_labels.bmp",
-        "image_scale": 4,
-        "n_hist_bins": 50,
-        "dist_lambda": 1/50.,
-        "neighbor_inds": [-1, 0, 1]
-    }
+    #params = {
+    #    "color_image": "Input/gundam.jpg",
+    #    "label_image": "Input/gundam_labels.bmp",
+    #    "image_scale": 8,
+    #    "n_hist_bins": 50,
+    #    "dist_lambda": 1/50.,
+    #    "neighbor_inds": [-1, 0, 1]
+    #}
+#
+    #params = {
+    #    "color_image": "Input/ycb_blender.jpg",
+    #    "label_image": "Input/ycb_blender_labels.bmp",
+    #    "image_scale": 4,
+    #    "n_hist_bins": 50,
+    #    "dist_lambda": 1/50.,
+    #    "neighbor_inds": [-1, 0, 1]
+    #}
 
     n_hist_bins = params["n_hist_bins"]
     dist_lambda = params["dist_lambda"]
