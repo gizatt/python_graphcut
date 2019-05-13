@@ -52,10 +52,13 @@ class HistogramDistribution():
         return np.log(self.pdf_approx(x) + 1E-6)
 
 
-def build_affinity_graph(img_lum_array, img_labels_array,
+def build_affinity_graph(img_array, img_lum_array, img_labels_array,
                          dist_lambda, n_hist_bins, neighbor_inds,
-                         make_plots=False, connect_node_labels=True,
-                         connect_color_priors=True):
+                         make_plots=False,
+                         B_sigma_scaling=1.0,
+                         connect_node_labels=True,
+                         connect_color_priors=True,
+                         diff_in_color_space=False):
     rows, cols = img_lum_array.shape
 
     # Generate background and foreground index lists.
@@ -77,46 +80,56 @@ def build_affinity_graph(img_lum_array, img_labels_array,
     n_not_labeled_inds = not_labeled_inds.shape[1]
 
     # Generate a histogram of itensities over the labeled regions
-    fg_intensity_hist = HistogramDistribution(
-        img_lum_array, weights=1.*fg_label_mask,
-        bins=n_hist_bins, range=(0., 1.))
-    bg_intensity_hist = HistogramDistribution(
-        img_lum_array, weights=1.*bg_label_mask,
-        bins=n_hist_bins, range=(0., 1.))
+    # and precompute the log-likelihoods at the not-labeled positions
+    if n_bg_label_inds > 0:
+        bg_intensity_hist = HistogramDistribution(
+            img_lum_array, weights=1.*bg_label_mask,
+            bins=n_hist_bins, range=(0., 1.))
+        bg_nll_all = -bg_intensity_hist.log_pdf(img_lum_array)
+        bg_nll = bg_nll_all[not_labeled_inds[0, :],
+                            not_labeled_inds[1, :]]
+        print("BG NLL range: %f to %f" % (np.min(bg_nll), np.max(bg_nll)))
+    else:
+        bg_nll = 1.
 
-    # Precompute the log-likelihoods at the not-labeled positions
-    fg_nll_all = -fg_intensity_hist.log_pdf(img_lum_array)
-    bg_nll_all = -bg_intensity_hist.log_pdf(img_lum_array)
+    if n_fg_label_inds > 0:
+        fg_intensity_hist = HistogramDistribution(
+            img_lum_array, weights=1.*fg_label_mask,
+            bins=n_hist_bins, range=(0., 1.))
+        fg_nll_all = -fg_intensity_hist.log_pdf(img_lum_array)
+        fg_nll = fg_nll_all[not_labeled_inds[0, :],
+                            not_labeled_inds[1, :]]
+
+        print("FG NLL range: %f to %f" % (np.min(fg_nll), np.max(fg_nll)))
+    else:
+        fg_nll = 1.
 
     if make_plots:
         plt.figure()
         plt.title("Foreground and background nlls over image")
         plt.subplot(1, 2, 1)
-        plt.imshow(fg_nll_all)
+        if (n_fg_label_inds > 0):
+            plt.imshow(fg_nll_all)
         plt.title("FG NLL")
         plt.subplot(1, 2, 2)
-        plt.imshow(bg_nll_all)
+        if (n_bg_label_inds > 0):
+            plt.imshow(bg_nll_all)
         plt.title("BG NLL")
         plt.pause(1E-3)
-
-    bg_nll = bg_nll_all[not_labeled_inds[0, :],
-                        not_labeled_inds[1, :]]
-    fg_nll = fg_nll_all[not_labeled_inds[0, :],
-                        not_labeled_inds[1, :]]
-    print("BG NLL range: %f to %f" % (np.min(bg_nll), np.max(bg_nll)))
-    print("FG NLL range: %f to %f" % (np.min(fg_nll), np.max(fg_nll)))
 
     if make_plots:
         plt.figure()
         plt.subplot(1, 2, 1)
         xi = np.linspace(0.0, 1.0, 255)
-        plt.plot(xi, fg_intensity_hist.log_pdf(xi), label="log_pdf")
-        plt.plot(xi, fg_intensity_hist.pdf(xi), label="pdf")
+        if (n_fg_label_inds > 0):
+            plt.plot(xi, fg_intensity_hist.log_pdf(xi), label="log_pdf")
+            plt.plot(xi, fg_intensity_hist.pdf(xi), label="pdf")
         plt.legend()
         plt.title("Foreground histogram")
         plt.subplot(1, 2, 2)
-        plt.plot(xi, bg_intensity_hist.log_pdf(xi), label="log_pdf")
-        plt.plot(xi, bg_intensity_hist.pdf(xi), label="pdf")
+        if (n_bg_label_inds > 0):
+            plt.plot(xi, bg_intensity_hist.log_pdf(xi), label="log_pdf")
+            plt.plot(xi, bg_intensity_hist.pdf(xi), label="pdf")
         plt.legend()
         plt.title("Background histogram")
         plt.pause(0.1)
@@ -143,19 +156,24 @@ def build_affinity_graph(img_lum_array, img_labels_array,
                 dist = 1.
             else:
                 dist = np.sqrt(float(u_neighbor_dir**2 + v_neighbor_dir**2))
-            diff_im = (img_lum_array -
-                       np.roll(img_lum_array,
-                               (u_neighbor_dir, v_neighbor_dir), range(2)))
-            diff_im = np.square(diff_im).astype(float)
+
+            if diff_in_color_space:
+                diff_im = (img_array -
+                           np.roll(img_array,
+                                   (u_neighbor_dir, v_neighbor_dir), range(2)))
+                diff_im = np.sum(np.square(diff_im).astype(float), axis=2)
+            else:
+                diff_im = (img_lum_array -
+                           np.roll(img_lum_array,
+                                   (u_neighbor_dir, v_neighbor_dir), range(2)))
+                diff_im = np.square(diff_im).astype(float)
+
             # Calculate sigma via Eq 5 in the GrabCut paper as scaled
             # to the expected contrast across the whole image
-            B_sigma = np.mean(diff_im) + 1E-6
+            B_sigma = B_sigma_scaling * (np.mean(diff_im)) + 1E-6
             # Luminance smoothness -- higher scores for closeness
             # of neighboring colors.
             Bpq = np.exp(-diff_im / (2. * B_sigma))/dist
-            # Same thing, but in full color space.
-            # color_diff_im = (img_array - np.roll(img_array, (u_neighbor_dir, v_neighbor_dir), range(2)))[1:-1, 1:-1, :]
-            # Bpq = np.exp(-np.sum(np.square(color_diff_im), axis=2).astype(float)/(2.*B_sigma**2.))/dist
             rolled_inds = np.roll(
                 inds, (u_neighbor_dir, v_neighbor_dir), range(2))
 
@@ -201,38 +219,42 @@ def build_affinity_graph(img_lum_array, img_labels_array,
     start_sink_and_source = time.time()
     if connect_node_labels:
         # Background nodes connect to the source for free..
-        graph_matrix += scipy.sparse.coo_matrix(
-            (np.zeros(n_bg_label_inds),
-             (np.ones(n_bg_label_inds, dtype=np.long)*source_node_ind,
-              uv_to_ind(bg_label_inds[0, :], bg_label_inds[1, :]))),
-            shape=graph_matrix.shape)
-        # Background nodes connect to the sink with exceeding large weight.
-        graph_matrix += scipy.sparse.coo_matrix(
-            (K * np.ones(n_bg_label_inds),
-             (np.ones(n_bg_label_inds, dtype=np.long)*sink_node_ind,
-              uv_to_ind(bg_label_inds[0, :], bg_label_inds[1, :]))),
-            shape=graph_matrix.shape)
+        if (n_bg_label_inds > 0):
+            graph_matrix += scipy.sparse.coo_matrix(
+                (np.zeros(n_bg_label_inds),
+                 (np.ones(n_bg_label_inds, dtype=np.long)*source_node_ind,
+                  uv_to_ind(bg_label_inds[0, :], bg_label_inds[1, :]))),
+                shape=graph_matrix.shape)
+            # Background nodes connect to the sink with exceeding large weight.
+            graph_matrix += scipy.sparse.coo_matrix(
+                (K * np.ones(n_bg_label_inds),
+                 (np.ones(n_bg_label_inds, dtype=np.long)*sink_node_ind,
+                  uv_to_ind(bg_label_inds[0, :], bg_label_inds[1, :]))),
+                shape=graph_matrix.shape)
 
-        # Foreground nodes connect to the sink for free.
-        graph_matrix += scipy.sparse.coo_matrix(
-            (np.zeros(n_fg_label_inds),
-             (np.ones(n_fg_label_inds, dtype=np.long)*sink_node_ind,
-              uv_to_ind(fg_label_inds[0, :], fg_label_inds[1, :]))),
-            shape=graph_matrix.shape)
-        # Foreground nodes connect to source with larger weight than
-        # any other edge going to that node.
-        graph_matrix += scipy.sparse.coo_matrix(
-            (K * np.ones(n_fg_label_inds),
-             (np.ones(n_fg_label_inds, dtype=np.long)*source_node_ind,
-              uv_to_ind(fg_label_inds[0, :], fg_label_inds[1, :]))),
-            shape=graph_matrix.shape)
+        if (n_fg_label_inds > 0):
+            # Foreground nodes connect to the sink for free.
+            graph_matrix += scipy.sparse.coo_matrix(
+                (np.zeros(n_fg_label_inds),
+                 (np.ones(n_fg_label_inds, dtype=np.long)*sink_node_ind,
+                  uv_to_ind(fg_label_inds[0, :], fg_label_inds[1, :]))),
+                shape=graph_matrix.shape)
+            # Foreground nodes connect to source with larger weight than
+            # any other edge going to that node.
+            graph_matrix += scipy.sparse.coo_matrix(
+                (K * np.ones(n_fg_label_inds),
+                 (np.ones(n_fg_label_inds, dtype=np.long)*source_node_ind,
+                  uv_to_ind(fg_label_inds[0, :], fg_label_inds[1, :]))),
+                shape=graph_matrix.shape)
 
     if connect_color_priors:
         if not connect_node_labels:
             # All nodes should connect to the background and foreground
             # with weight on how they fit into the OPPOSITE intensity histograms.
-            graph_matrix[source_node_ind, :-2] += bg_nll_all.flatten()
-            graph_matrix[sink_node_ind, :-2] += fg_nll_all.flatten()
+            if n_bg_label_inds > 0:
+                graph_matrix[source_node_ind, :-2] += bg_nll_all.flatten()
+            if n_fg_label_inds > 0:
+                graph_matrix[sink_node_ind, :-2] += fg_nll_all.flatten()
         else:
             # Unlabled nodes should connect to the background and foreground
             # with weight on how they fit into the OPPOSITE intensity histograms.
@@ -241,6 +263,7 @@ def build_affinity_graph(img_lum_array, img_labels_array,
                  (np.ones(n_not_labeled_inds, dtype=np.long)*source_node_ind,
                   uv_to_ind(not_labeled_inds[0, :], not_labeled_inds[1, :]))),
                 shape=graph_matrix.shape)
+
             graph_matrix += scipy.sparse.coo_matrix(
                 (np.ones(n_not_labeled_inds)*fg_nll*dist_lambda,
                  (np.ones(n_not_labeled_inds, dtype=np.long)*sink_node_ind,
@@ -295,7 +318,8 @@ def main():
     #    "image_scale": 1,
     #    "n_hist_bins": 50,
     #    "dist_lambda": 1/50.,
-    #    "neighbor_inds": [-1, 0, 1]
+    #    "neighbor_inds": [-1, 0, 1],
+    #   "diff_in_color_space": True
     #}
 
     #params = {
@@ -313,8 +337,30 @@ def main():
         "image_scale": 4,
         "n_hist_bins": 50,
         "dist_lambda": 1/50.,
-        "neighbor_inds": [-1, 0, 1]
+        "neighbor_inds": [-1, 0, 1],
+        "diff_in_color_space": True
     }
+
+    #params = {
+    #    "color_image": "Input/bird.jpg",
+    #    "label_image": "Input/bird_labels.bmp",
+    #    "image_scale": 4,
+    #    "n_hist_bins": 50,
+    #    "dist_lambda": 1/50.,
+    #    "neighbor_inds": [-1, 0, 1],
+    #    "diff_in_color_space": True
+    #}
+
+    #params = {
+    #    "color_image": "Input/squirrel.jpg",
+    #    "label_image": "Input/squirrel_labels.bmp",
+    #    "image_scale": 4,
+    #    "n_hist_bins": 50,
+    #    "dist_lambda": 1/50.,
+    #    "neighbor_inds": [-1, 0, 1],
+    #    "diff_in_color_space": True
+    #}
+
 
     n_hist_bins = params["n_hist_bins"]
     dist_lambda = params["dist_lambda"]
@@ -322,6 +368,7 @@ def main():
     label_image = params["label_image"]
     image_scale = params["image_scale"]
     neighbor_inds = params["neighbor_inds"]
+    diff_in_color_space = params["diff_in_color_space"]
 
     img = Image.open(color_image)
     img_orig_rows = img.height
@@ -353,9 +400,10 @@ def main():
     plt.pause(0.1)
 
     graph_matrix, source_node_ind, sink_node_ind = build_affinity_graph(
-        img_lum_array, img_labels_array, dist_lambda, n_hist_bins,
+        img_array, img_lum_array, img_labels_array, dist_lambda, n_hist_bins,
         neighbor_inds, make_plots=True, connect_node_labels=True,
-        connect_color_priors=True)
+        connect_color_priors=True, diff_in_color_space=diff_in_color_space,
+        B_sigma_scaling=B_sigma_scaling)
 
     if do_min_cut:
         foreground_inds, background_inds = perform_min_cut(
@@ -363,17 +411,26 @@ def main():
         background_inds.remove(sink_node_ind)
         foreground_inds.remove(source_node_ind)
         plt.figure().set_size_inches(10, 10)
-        mask_bg = img_lum_array.copy().reshape(-1)
+        plt.subplot(1, 3, 1)
+        mask_bg = (img_lum_array*0).reshape(-1)
         mask_bg[list(background_inds)] = 1.0
         mask_bg = mask_bg.reshape(img_lum_array.shape)
-        mask_fg = img_lum_array.copy().reshape(-1)
+        plt.imshow(mask_bg)
+        plt.title("BG mask")
+        plt.subplot(1, 3, 2)
+        mask_fg = (img_lum_array*0).reshape(-1)
         mask_fg[list(foreground_inds)] = 1.0
         mask_fg = mask_fg.reshape(img_lum_array.shape)
+        plt.imshow(mask_fg)
+        plt.title("FG mask")
 
-        combined_masks = np.stack([img_lum_array*0.25 + mask_fg*0.75,
-                                   img_lum_array*0.25,
-                                   img_lum_array*0.25 + mask_bg*0.75], axis=-1)
+        plt.subplot(1, 3, 3)
+        combined_masks = np.stack([img_lum_array*0.4 + mask_fg*0.6,
+                                   img_lum_array*0.4,
+                                   img_lum_array*0.4 + mask_bg*0.6], axis=-1)
         plt.imshow(combined_masks)
+        plt.title("Combined mask + underlying image")
+        plt.pause(1e-2)
 
     if do_laplacian:
         # Calculate graph Laplacian and its eigendecomp
