@@ -40,4 +40,3 @@ if __name__ == "__main__":
 
     with open("./Input/ObjectDiscoverySubset/test.yaml", 'w') as f:
         yaml.dump(test_pairs, f, default_flow_style=False)
-        
