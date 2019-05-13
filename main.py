@@ -52,87 +52,12 @@ class HistogramDistribution():
         return np.log(self.pdf_approx(x) + 1E-6)
 
 
-def main():
-    # CONFIG PARAMS
+def build_affinity_graph(img_lum_array, img_labels_array,
+                         dist_lambda, n_hist_bins, neighbor_inds,
+                         make_plots=False, connect_node_labels=True,
+                         connect_color_priors=True):
+    rows, cols = img_lum_array.shape
 
-    # n_hist_bins: # of histogram bins used for computing prior over
-    # foreground + background colors.
-    # Image_scale: Ratio by which the input image is scaled down.
-    # Dist_lambda: Multiplicative weight given to edges
-    # connecting unlabeled nodes to the background
-    # based on their negative log likelihood under
-    # the background/foreground intensity distributions.
-
-    do_min_cut = True
-    do_laplacian = False
-    connect_node_labels = True
-    connect_color_priors = True
-
-    # Load interesting image
-    image_set = []
-
-    params = {
-        "color_image": "Input/jeb.png",
-        "label_image": "Input/jeb_labels.bmp",
-        "image_scale": 1,
-        "n_hist_bins": 50,
-        "dist_lambda": 1/50.,
-        "neighbor_inds": [-1, 0, 1]
-    }
-
-    #params = {
-    #    "color_image": "Input/gundam.jpg",
-    #    "label_image": "Input/gundam_labels.bmp",
-    #    "image_scale": 8,
-    #    "n_hist_bins": 50,
-    #    "dist_lambda": 1/50.,
-    #    "neighbor_inds": [-1, 0, 1]
-    #}
-#
-    #params = {
-    #    "color_image": "Input/ycb_blender.jpg",
-    #    "label_image": "Input/ycb_blender_labels.bmp",
-    #    "image_scale": 4,
-    #    "n_hist_bins": 50,
-    #    "dist_lambda": 1/50.,
-    #    "neighbor_inds": [-1, 0, 1]
-    #}
-
-    n_hist_bins = params["n_hist_bins"]
-    dist_lambda = params["dist_lambda"]
-    color_image = params["color_image"]
-    label_image = params["label_image"]
-    image_scale = params["image_scale"]
-    neighbor_inds = params["neighbor_inds"]
-
-    img = Image.open(color_image)
-    img_orig_rows = img.height
-    img_orig_cols = img.width
-    img = img.resize((img_orig_cols/image_scale, img_orig_rows/image_scale))
-    img_lum = img.convert('L')
-    img_lum_array = np.array(img_lum)/255.
-    img_array = np.array(img)/255.
-    img_labels = Image.open(label_image).resize(
-        (img_orig_cols/image_scale, img_orig_rows/image_scale))
-    img_labels_array = np.array(img_labels)/255.
-
-    rows = img_array.shape[0]
-    cols = img_array.shape[1]
-    print("Input resolution: %d rows x %d cols" % (rows, cols))
-
-    plt.figure().set_size_inches(12, 12)
-    plt.subplot(3, 1, 1)
-    plt.imshow(img_lum)
-    plt.title("Luminance image")
-    plt.subplot(3, 1, 2)
-    plt.imshow(img_labels)
-    plt.title("Label image")
-    plt.subplot(3, 1, 3)
-    plt.imshow(img_labels_array*0.75 +
-               np.stack([img_lum_array]*3, axis=-1))
-    plt.title("Labels over luminance image")
-
-    plt.pause(0.1)
     # Generate background and foreground index lists.
     # Mask foreground in red (taking anything close
     # in case image compression does weird things)
@@ -162,35 +87,39 @@ def main():
     # Precompute the log-likelihoods at the not-labeled positions
     fg_nll_all = -fg_intensity_hist.log_pdf(img_lum_array)
     bg_nll_all = -bg_intensity_hist.log_pdf(img_lum_array)
-    plt.figure()
-    plt.title("Foreground and background nlls over image")
-    plt.subplot(1, 2, 1)
-    plt.imshow(fg_nll_all)
-    plt.title("FG NLL")
-    plt.subplot(1, 2, 2)
-    plt.imshow(bg_nll_all)
-    plt.title("BG NLL")
-    plt.pause(1E-3)
+
+    if make_plots:
+        plt.figure()
+        plt.title("Foreground and background nlls over image")
+        plt.subplot(1, 2, 1)
+        plt.imshow(fg_nll_all)
+        plt.title("FG NLL")
+        plt.subplot(1, 2, 2)
+        plt.imshow(bg_nll_all)
+        plt.title("BG NLL")
+        plt.pause(1E-3)
+
     bg_nll = bg_nll_all[not_labeled_inds[0, :],
                         not_labeled_inds[1, :]]
     fg_nll = fg_nll_all[not_labeled_inds[0, :],
                         not_labeled_inds[1, :]]
     print("BG NLL range: %f to %f" % (np.min(bg_nll), np.max(bg_nll)))
     print("FG NLL range: %f to %f" % (np.min(fg_nll), np.max(fg_nll)))
-    plt.figure()
-    plt.subplot(1, 2, 1)
-    xi = np.linspace(0.0, 1.0, 255)
 
-    plt.plot(xi, fg_intensity_hist.log_pdf(xi), label="log_pdf")
-    plt.plot(xi, fg_intensity_hist.pdf(xi), label="pdf")
-    plt.legend()
-    plt.title("Foreground histogram")
-    plt.subplot(1, 2, 2)
-    plt.plot(xi, bg_intensity_hist.log_pdf(xi), label="log_pdf")
-    plt.plot(xi, bg_intensity_hist.pdf(xi), label="pdf")
-    plt.legend()
-    plt.title("Background histogram")
-    plt.pause(0.1)
+    if make_plots:
+        plt.figure()
+        plt.subplot(1, 2, 1)
+        xi = np.linspace(0.0, 1.0, 255)
+        plt.plot(xi, fg_intensity_hist.log_pdf(xi), label="log_pdf")
+        plt.plot(xi, fg_intensity_hist.pdf(xi), label="pdf")
+        plt.legend()
+        plt.title("Foreground histogram")
+        plt.subplot(1, 2, 2)
+        plt.plot(xi, bg_intensity_hist.log_pdf(xi), label="log_pdf")
+        plt.plot(xi, bg_intensity_hist.pdf(xi), label="pdf")
+        plt.legend()
+        plt.title("Background histogram")
+        plt.pause(0.1)
 
     # Build segmentation graph from GraphCut
     N_nodes = rows*cols + 2
@@ -203,7 +132,8 @@ def main():
 
     # Compute pairwise relationships terms
     start_Bpq = time.time()
-    plt.figure()
+    if make_plots:
+        plt.figure()
     nn = len(neighbor_inds)
     for ui, u_neighbor_dir in enumerate(neighbor_inds):
         us, vs = np.meshgrid(range(rows), range(cols), indexing='ij')
@@ -251,10 +181,12 @@ def main():
             graph_matrix += scipy.sparse.coo_matrix(
                 (Bpq.flatten(), (valid_inds.flatten(), rolled_inds.flatten())),
                 shape=graph_matrix.shape)
-            plt.subplot(nn, nn, ui*nn + vi + 1)
-            plt.title("Offset %d, %d" % (u_neighbor_dir, v_neighbor_dir))
-            plt.imshow(Bpq)
-    plt.tight_layout()
+            if make_plots:
+                plt.subplot(nn, nn, ui*nn + vi + 1)
+                plt.title("Offset %d, %d" % (u_neighbor_dir, v_neighbor_dir))
+                plt.imshow(Bpq)
+    if make_plots:
+        plt.tight_layout()
 
     # Find a K that exceeds the sum (across pixels) of the max connection
     # going in to each pixel.
@@ -318,24 +250,112 @@ def main():
     # Duplicate all of the above into the transpose part of
     # the matrix.
     graph_matrix[:, -2:] += graph_matrix[-2:, :].T
-    plt.figure()
-    plt.title("Weights to the sink and source")
-    plt.subplot(2, 2, 1)
-    plt.imshow(np.asarray(graph_matrix[:-2, -2].todense()).reshape(img_lum_array.shape))
-    plt.title("To source")
-    plt.subplot(2, 2, 2)
-    plt.title("To sink")
-    plt.imshow(np.asarray(graph_matrix[:-2, -1].todense()).reshape(img_lum_array.shape))
-    plt.subplot(2, 2, 3)
-    plt.title("To source")
-    plt.imshow(np.asarray(graph_matrix[-2, :-2].todense()).reshape(img_lum_array.shape))
-    plt.subplot(2, 2, 4)
-    plt.title("To sink")
-    plt.imshow(np.asarray(graph_matrix[-1, :-2].todense()).reshape(img_lum_array.shape))
-    plt.pause(1E-3)
+    if make_plots:
+        plt.figure()
+        plt.title("Weights to the sink and source")
+        plt.subplot(2, 2, 1)
+        plt.imshow(np.asarray(graph_matrix[:-2, -2].todense()).reshape(img_lum_array.shape))
+        plt.title("To source")
+        plt.subplot(2, 2, 2)
+        plt.title("To sink")
+        plt.imshow(np.asarray(graph_matrix[:-2, -1].todense()).reshape(img_lum_array.shape))
+        plt.subplot(2, 2, 3)
+        plt.title("To source")
+        plt.imshow(np.asarray(graph_matrix[-2, :-2].todense()).reshape(img_lum_array.shape))
+        plt.subplot(2, 2, 4)
+        plt.title("To sink")
+        plt.imshow(np.asarray(graph_matrix[-1, :-2].todense()).reshape(img_lum_array.shape))
+        plt.pause(1E-3)
 
     print("Bg and fg relationship terms added in %f seconds." %
           (time.time() - start_sink_and_source))
+    return graph_matrix, source_node_ind, sink_node_ind
+
+
+def main():
+    # CONFIG PARAMS
+
+    # n_hist_bins: # of histogram bins used for computing prior over
+    # foreground + background colors.
+    # Image_scale: Ratio by which the input image is scaled down.
+    # Dist_lambda: Multiplicative weight given to edges
+    # connecting unlabeled nodes to the background
+    # based on their negative log likelihood under
+    # the background/foreground intensity distributions.
+
+    do_min_cut = True
+    do_laplacian = False
+
+    # Load interesting image
+    image_set = []
+
+    #params = {
+    #    "color_image": "Input/jeb.png",
+    #    "label_image": "Input/jeb_labels.bmp",
+    #    "image_scale": 1,
+    #    "n_hist_bins": 50,
+    #    "dist_lambda": 1/50.,
+    #    "neighbor_inds": [-1, 0, 1]
+    #}
+
+    #params = {
+    #    "color_image": "Input/gundam.jpg",
+    #    "label_image": "Input/gundam_labels.bmp",
+    #    "image_scale": 8,
+    #    "n_hist_bins": 50,
+    #    "dist_lambda": 1/50.,
+    #    "neighbor_inds": [-1, 0, 1]
+    #}
+#
+    params = {
+        "color_image": "Input/ycb_blender.jpg",
+        "label_image": "Input/ycb_blender_labels.bmp",
+        "image_scale": 4,
+        "n_hist_bins": 50,
+        "dist_lambda": 1/50.,
+        "neighbor_inds": [-1, 0, 1]
+    }
+
+    n_hist_bins = params["n_hist_bins"]
+    dist_lambda = params["dist_lambda"]
+    color_image = params["color_image"]
+    label_image = params["label_image"]
+    image_scale = params["image_scale"]
+    neighbor_inds = params["neighbor_inds"]
+
+    img = Image.open(color_image)
+    img_orig_rows = img.height
+    img_orig_cols = img.width
+    img = img.resize((img_orig_cols/image_scale, img_orig_rows/image_scale))
+    img_lum = img.convert('L')
+    img_lum_array = np.array(img_lum)/255.
+    img_array = np.array(img)/255.
+    img_labels = Image.open(label_image).resize(
+        (img_orig_cols/image_scale, img_orig_rows/image_scale))
+    img_labels_array = np.array(img_labels)/255.
+
+    rows = img_array.shape[0]
+    cols = img_array.shape[1]
+    print("Input resolution: %d rows x %d cols" % (rows, cols))
+
+    plt.figure().set_size_inches(12, 12)
+    plt.subplot(3, 1, 1)
+    plt.imshow(img_lum)
+    plt.title("Luminance image")
+    plt.subplot(3, 1, 2)
+    plt.imshow(img_labels)
+    plt.title("Label image")
+    plt.subplot(3, 1, 3)
+    plt.imshow(img_labels_array*0.75 +
+               np.stack([img_lum_array]*3, axis=-1))
+    plt.title("Labels over luminance image")
+
+    plt.pause(0.1)
+
+    graph_matrix, source_node_ind, sink_node_ind = build_affinity_graph(
+        img_lum_array, img_labels_array, dist_lambda, n_hist_bins,
+        neighbor_inds, make_plots=True, connect_node_labels=True,
+        connect_color_priors=True)
 
     if do_min_cut:
         foreground_inds, background_inds = perform_min_cut(
