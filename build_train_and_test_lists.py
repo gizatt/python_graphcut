@@ -16,13 +16,17 @@ if __name__ == "__main__":
     for root, dirs, files in os.walk(startpath):
         if "GroundTruth" in dirs:
             for file in files:
-                all_pairs.append({
-                    "color_image": os.path.join(root, file),
-                    "label_image": os.path.join(root, "GroundTruth", file)
-                })
-
-    n_train = 10
-    n_test = 10
+                # Find the right extension name for the label image
+                for extension in [".png", ".bmp"]:
+                    label_image_name = os.path.join(root, "GroundTruth", file[:-4] + extension)
+                    if os.path.exists(label_image_name):
+                        all_pairs.append({
+                            "color_image": os.path.join(root, file),
+                            "label_image": label_image_name
+                        })
+                        break
+    n_train = 100
+    n_test = 20
 
     print("%d pairs, picking %d train and %d test at random." %
           (len(all_pairs), n_train, n_test))
