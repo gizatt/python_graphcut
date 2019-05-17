@@ -25,8 +25,8 @@ if __name__ == "__main__":
                             "label_image": label_image_name
                         })
                         break
-    n_train = 100
-    n_test = 20
+    n_train = 400
+    n_test = 50
 
     print("%d pairs, picking %d train and %d test at random." %
           (len(all_pairs), n_train, n_test))

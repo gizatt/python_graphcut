@@ -90,7 +90,7 @@ def build_affinity_graph(img_array, img_lum_array, img_labels_array,
                             not_labeled_inds[1, :]]
         print("BG NLL range: %f to %f" % (np.min(bg_nll), np.max(bg_nll)))
     else:
-        bg_nll = 1.
+        bg_nll = 0.
 
     if n_fg_label_inds > 0:
         fg_intensity_hist = HistogramDistribution(
@@ -102,7 +102,7 @@ def build_affinity_graph(img_array, img_lum_array, img_labels_array,
 
         print("FG NLL range: %f to %f" % (np.min(fg_nll), np.max(fg_nll)))
     else:
-        fg_nll = 1.
+        fg_nll = 0.
 
     if make_plots:
         plt.figure()
@@ -312,34 +312,38 @@ def main():
     # Load interesting image
     image_set = []
 
-    #params = {
-    #    "color_image": "Input/jeb.png",
-    #    "label_image": "Input/jeb_labels.bmp",
-    #    "image_scale": 1,
-    #    "n_hist_bins": 50,
-    #    "dist_lambda": 1/50.,
-    #    "neighbor_inds": [-1, 0, 1],
-    #   "diff_in_color_space": True
-    #}
+    params = {
+        "color_image": "Input/jeb.png",
+        "label_image": "Input/jeb_labels.bmp",
+        "image_scale": 1,
+        "n_hist_bins": 50,
+        "dist_lambda": 1/10.,
+        "neighbor_inds": [-1, 0, 1],
+        "diff_in_color_space": True,
+        "B_sigma_scaling": 0.5
+    }
 
     #params = {
     #    "color_image": "Input/gundam.jpg",
     #    "label_image": "Input/gundam_labels.bmp",
-    #    "image_scale": 8,
+    #    "image_scale": 8, # Scale way down for speed
     #    "n_hist_bins": 50,
-    #    "dist_lambda": 1/50.,
-    #    "neighbor_inds": [-1, 0, 1]
+    #    "dist_lambda": 1/10.,
+    #    "neighbor_inds": [-1, 0, 1],
+    #    "diff_in_color_space": True,
+    #    "B_sigma_scaling": 0.5,
     #}
 #
-    params = {
-        "color_image": "Input/ycb_blender.jpg",
-        "label_image": "Input/ycb_blender_labels.bmp",
-        "image_scale": 4,
-        "n_hist_bins": 50,
-        "dist_lambda": 1/50.,
-        "neighbor_inds": [-1, 0, 1],
-        "diff_in_color_space": True
-    }
+    #params = {
+    #    "color_image": "Input/ycb_blender.jpg",
+    #    "label_image": "Input/ycb_blender_labels.bmp",
+    #    "image_scale": 4,
+    #    "n_hist_bins": 50,
+    #    "dist_lambda": 1/50.,
+    #    "neighbor_inds": [-1, 0, 1],
+    #    "diff_in_color_space": True,
+    #    "B_sigma_scaling": 1.0
+    #}
 
     #params = {
     #    "color_image": "Input/bird.jpg",
@@ -348,18 +352,20 @@ def main():
     #    "n_hist_bins": 50,
     #    "dist_lambda": 1/50.,
     #    "neighbor_inds": [-1, 0, 1],
-    #    "diff_in_color_space": True
+    #    "diff_in_color_space": True,
+    #    "B_sigma_scaling": 1.0
     #}
 
-    #params = {
-    #    "color_image": "Input/squirrel.jpg",
-    #    "label_image": "Input/squirrel_labels.bmp",
-    #    "image_scale": 4,
-    #    "n_hist_bins": 50,
-    #    "dist_lambda": 1/50.,
-    #    "neighbor_inds": [-1, 0, 1],
-    #    "diff_in_color_space": True
-    #}
+    # params = {
+    #     "color_image": "Input/squirrel.jpg",
+    #     "label_image": "Input/squirrel_labels.bmp",
+    #     "image_scale": 2,
+    #     "n_hist_bins": 50,
+    #     "dist_lambda": 1/10.,
+    #     "neighbor_inds": [-1, 0, 1],
+    #     "diff_in_color_space": True,
+    #     "B_sigma_scaling": 0.5
+    # }
 
 
     n_hist_bins = params["n_hist_bins"]
@@ -369,6 +375,7 @@ def main():
     image_scale = params["image_scale"]
     neighbor_inds = params["neighbor_inds"]
     diff_in_color_space = params["diff_in_color_space"]
+    B_sigma_scaling = params["B_sigma_scaling"]
 
     img = Image.open(color_image)
     img_orig_rows = img.height
@@ -386,16 +393,16 @@ def main():
     print("Input resolution: %d rows x %d cols" % (rows, cols))
 
     plt.figure().set_size_inches(12, 12)
-    plt.subplot(3, 1, 1)
-    plt.imshow(img_lum)
-    plt.title("Luminance image")
-    plt.subplot(3, 1, 2)
+    plt.subplot(1, 3, 1)
+    plt.imshow(img)
+    plt.title("Input image")
+    plt.subplot(1, 3, 2)
     plt.imshow(img_labels)
-    plt.title("Label image")
-    plt.subplot(3, 1, 3)
+    plt.title("FG/BG hints")
+    plt.subplot(1, 3, 3)
     plt.imshow(img_labels_array*0.75 +
                np.stack([img_lum_array]*3, axis=-1))
-    plt.title("Labels over luminance image")
+    plt.title("Hints over image")
 
     plt.pause(0.1)
 
@@ -425,9 +432,9 @@ def main():
         plt.title("FG mask")
 
         plt.subplot(1, 3, 3)
-        combined_masks = np.stack([img_lum_array*0.4 + mask_fg*0.6,
-                                   img_lum_array*0.4,
-                                   img_lum_array*0.4 + mask_bg*0.6], axis=-1)
+        combined_masks = np.stack([img_lum_array*0.5 + mask_fg*0.5,
+                                   img_lum_array*0.5,
+                                   img_lum_array*0.5 + mask_bg*0.5], axis=-1)
         plt.imshow(combined_masks)
         plt.title("Combined mask + underlying image")
         plt.pause(1e-2)

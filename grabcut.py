@@ -78,8 +78,8 @@ class GrabCutManager():
             self.params["neighbor_inds"],
             make_plots=True, connect_node_labels=True,
             connect_color_priors=True,
-            diff_in_color_space=params["diff_in_color_space"],
-            B_sigma_scaling=params["B_sigma_scaling"])
+            diff_in_color_space=self.params["diff_in_color_space"],
+            B_sigma_scaling=self.params["B_sigma_scaling"])
 
         foreground_inds, background_inds = perform_min_cut(
             graph_matrix, source_node_ind, sink_node_ind)
@@ -116,10 +116,7 @@ class GrabCutManager():
         plt.imshow(mask_fg)
         plt.title("FG mask")
 
-        plt.subplot(1, 3, 3)
-        combined_masks = np.stack([img_lum_array_crop*0.6 + mask_fg*0.4,
-                                   img_lum_array_crop*0.6,
-                                   img_lum_array_crop*0.6 + mask_bg*0.4], axis=-1)
+        plt.subplot(1, 1, 1)
         plt.imshow(combined_masks)
         plt.title("Combined mask + underlying image")
         plt.show()
@@ -141,36 +138,50 @@ def main():
         "dist_lambda": 1/10.,
         "neighbor_inds": [-1, 0, 1],
         "diff_in_color_space": True,
-        "B_sigma_scaling": 1.
+        "B_sigma_scaling": 0.5
     }
     #params = {
     #    "color_image": "Input/bird.jpg",
     #    "image_scale": 4,
     #    "n_hist_bins": 50,
     #    "dist_lambda": 1/50.,
-    #    "neighbor_inds": [-1, 0, 1]
+    #    "neighbor_inds": [-1, 0, 1],
+    #    "diff_in_color_space": True,
+    #    "B_sigma_scaling": 1.
     #}
     #params = {
     #    "color_image": "Input/staff.jpg",
     #    "image_scale": 4,
     #    "n_hist_bins": 50,
+    #    "dist_lambda": 1/10.,
+    #    "neighbor_inds": [-1, 0, 1],
+    #    "diff_in_color_space": True,
+    #    "B_sigma_scaling": 0.5
+    #}
+    #params = {
+    #    "color_image": "Input/squirrel.jpg",
+    #    "image_scale": 4,
+    #    "n_hist_bins": 50,
     #    "dist_lambda": 1/50.,
     #    "neighbor_inds": [-1, 0, 1]
     #}
-    params = {
-        "color_image": "Input/squirrel.jpg",
-        "image_scale": 4,
-        "n_hist_bins": 50,
-        "dist_lambda": 1/50.,
-        "neighbor_inds": [-1, 0, 1]
-    }
-    params = {
-        "color_image": "Input/seagulls.jpg",
-        "image_scale": 4,
-        "n_hist_bins": 50,
-        "dist_lambda": 1/50.,
-        "neighbor_inds": [-1, 0, 1]
-    }
+    #params = {
+    #    "color_image": "Input/seagulls.jpg",
+    #    "image_scale": 4,
+    #    "n_hist_bins": 50,
+    #    "dist_lambda": 1/50.,
+    #    "neighbor_inds": [-1, 0, 1]
+    #}
+    #params = {
+    #    "color_image": "Input/gundam.jpg",
+    #    "label_image": "Input/gundam_labels.bmp",
+    #    "image_scale": 4,
+    #    "n_hist_bins": 50,
+    #    "dist_lambda": 1/10.,
+    #    "neighbor_inds": [-1, 0, 1],
+    #    "diff_in_color_space": True,
+    #    "B_sigma_scaling": 0.5,
+    #}
 
 
     global grabcut_manager
