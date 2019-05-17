@@ -1,4 +1,5 @@
 from __future__ import print_function
+import argparse
 import os
 import sys
 import matplotlib.pyplot as plt
@@ -295,7 +296,7 @@ def build_affinity_graph(img_array, img_lum_array, img_labels_array,
     return graph_matrix, source_node_ind, sink_node_ind
 
 
-def main():
+def main(test_mode=False):
     # CONFIG PARAMS
 
     # n_hist_bins: # of histogram bins used for computing prior over
@@ -477,7 +478,16 @@ def main():
             plt.imshow(img_recolored_by_eigvec)
             plt.title("Eigenvec #%d" % k)
 
-    plt.show()
+    if test_mode:
+        for i in plt.get_fignums():
+            plt.figure(i)
+            plt.savefig('Output/figure%d.png' % i)
+    else:
+        plt.show()
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-t", "--test", help="Build server version: don't block, save an image out instead.",
+                        action="store_true")
+    args = parser.parse_args()
+    main(args.test)

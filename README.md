@@ -9,7 +9,7 @@
 ## Prereqs
 
 ```
-pip install numpy scipy networkx yaml
+pip install argparse numpy scipy networkx yaml
 ```
 
 Tested on Python 2.7. Probably works on anything.
